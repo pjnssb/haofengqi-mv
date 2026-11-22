@@ -1,0 +1,117 @@
+name: Compile Pure-Code MV
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      fps:
+        description: "Render framerate (30 or 60)"
+        required: false
+        default: "30"
+        type: choice
+        options:
+          - "30"
+          - "60"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-render-mv:
+    name: Build C++20 HDR Engine & Render 1080p MV
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install toolchain, Cairo/Pango, Noto Serif CJK, FFmpeg & SciPy
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            g++ make pkg-config ffmpeg \
+            libcairo2-dev libpango1.0-dev fonts-noto-cjk \
+            python3-numpy python3-scipy
+          fc-cache -fv >/dev/null 2>&1 || true
+
+      - name: Compile C++20 HDR Cinema Renderer
+        run: |
+          make all
+          echo "CPU cores: $(nproc)"
+
+      - name: Extract embedded word-by-word LRC & audio DSP features
+        run: |
+          FPS="${{ inputs.fps || '30' }}"
+          /usr/bin/python3 scripts/extract_features.py \
+            --flac assets/haofengqi.flac \
+            --fps "${FPS}" \
+            --out-dir build
+
+      - name: Render 16-act keyframe stills & storyboard contact sheet
+        run: |
+          ./build/mv_render \
+            --lyrics build/lyrics.json \
+            --features build/features.bin \
+            --preview-dir build/previews
+          ffmpeg -y -v warning -pattern_type glob -i 'build/previews/*.png' \
+            -filter_complex "scale=480:270,tile=4x4" \
+            -q:v 2 build/storyboard_contact_sheet.jpg
+
+      - name: Render full 1920x1080 CinemaScope MV & mux lossless source audio
+        run: |
+          FPS="${{ inputs.fps || '30' }}"
+          ./build/mv_render \
+            --lyrics build/lyrics.json \
+            --features build/features.bin \
+            --stream | \
+          ffmpeg -y -v warning -stats \
+            -f rawvideo -pix_fmt rgb24 -s 1920x1080 -r "${FPS}" -i - \
+            -i assets/haofengqi.flac \
+            -map 0:v:0 -map 1:a:0 \
+            -c:v libx264 -preset medium -crf 17 -pix_fmt yuv420p -movflags +faststart \
+            -c:a aac -b:a 320k \
+            -metadata title="好风起 (Pure-Code Procedural MV)" \
+            -metadata artist="周深" \
+            -shortest build/haofengqi_mv_1080p.mp4
+
+      - name: Verify compiled MP4 streams
+        run: |
+          ls -lh build/haofengqi_mv_1080p.mp4 build/storyboard_contact_sheet.jpg
+          ffprobe -v error -show_format -show_streams build/haofengqi_mv_1080p.mp4
+
+      - name: Upload 1080p MV Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: haofengqi-mv-1080p
+          path: build/haofengqi_mv_1080p.mp4
+          retention-days: 30
+
+      - name: Upload Storyboard Stills Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: haofengqi-storyboard-stills
+          path: |
+            build/storyboard_contact_sheet.jpg
+            build/previews/*.png
+          retention-days: 30
+
+      - name: Publish Release Asset (latest-mv)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="latest-mv"
+          NOTES="Automated pure-code C++20/HDR/Cairo/Pango MV render for 《好风起 - 周深》 (commit ${{ github.sha }})."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              build/haofengqi_mv_1080p.mp4 \
+              build/storyboard_contact_sheet.jpg \
+              --clobber
+          else
+            gh release create "$TAG" \
+              build/haofengqi_mv_1080p.mp4 \
+              build/storyboard_contact_sheet.jpg \
+              --title "好风起 · 纯代码电影版 MV (1080p)" \
+              --notes "$NOTES"
+          fi
