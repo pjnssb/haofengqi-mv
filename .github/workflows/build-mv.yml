@@ -49,15 +49,15 @@ jobs:
             --fps "${FPS}" \
             --out-dir build
 
-      - name: Render 16-act keyframe stills & storyboard contact sheet
+      - name: Render 24-shot keyframe stills & storyboard contact sheet
         run: |
           ./build/mv_render \
             --lyrics build/lyrics.json \
             --features build/features.bin \
             --preview-dir build/previews
           ffmpeg -y -v warning -pattern_type glob -i 'build/previews/*.png' \
-            -filter_complex "scale=480:270,tile=4x4" \
-            -q:v 2 build/storyboard_contact_sheet.jpg
+            -filter_complex "scale=480:270,tile=4x6" \
+            -frames:v 1 -update 1 -q:v 2 build/storyboard_contact_sheet.jpg
 
       - name: Render full 1920x1080 CinemaScope MV & mux lossless source audio
         run: |

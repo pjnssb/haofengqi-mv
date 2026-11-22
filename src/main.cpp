@@ -2,6 +2,7 @@
 #include "cairo_scenes.hpp"
 #include "hdr_canvas.hpp"
 #include "sky_and_atmosphere.hpp"
+#include "storyboard.hpp"
 #include "typography.hpp"
 
 #include <chrono>
@@ -36,43 +37,42 @@ static void write_rgb_png(const HdrCanvas& canvas, const std::string& path) {
 
 static void render_single_frame(HdrCanvas& canvas, int frame_idx, double time_sec,
                                 const LyricsData& lrc, const AudioFeatures& feat) {
-    canvas.clear_layers();
-
     AudioFrame af = feat.sample(time_sec);
-    int act_id = find_act(time_sec);
+    ShotBlend sb = evaluate_storyboard(time_sec);
+    const bool dual = (sb.prev != nullptr && sb.blend < 0.999f);
 
-    render_atmosphere(canvas, time_sec, af, act_id);
-    render_cairo_scene(canvas, time_sec, af, act_id);
-    render_typography(canvas, time_sec, lrc, af, act_id);
+    canvas.clear_layers(dual);
 
-    // Subtle dramatic picture fade at transitions & start/end (lyrics in mattes remain clear)
+    render_atmosphere_shot(canvas.atmo, sb.cur->kind, time_sec, sb.cur_prog, af);
+    render_cairo_shot(canvas.scene_cr, canvas.glow_cr, sb.cur->kind, time_sec, sb.cur_prog, af);
+
+    if (dual) {
+        render_atmosphere_shot(canvas.atmo_prev, sb.prev->kind, time_sec, sb.prev_prog, af);
+        render_cairo_shot(canvas.scene_prev_cr, canvas.glow_prev_cr, sb.prev->kind, time_sec, sb.prev_prog, af);
+    }
+
+    render_typography(canvas, time_sec, lrc, af, sb);
+
     float total_dur = static_cast<float>(lrc.meta.duration > 1.0 ? lrc.meta.duration : 265.54);
     float fade = smoothstep(0.0f, 1.35f, static_cast<float>(time_sec)) *
                  (1.0f - smoothstep(total_dur - 2.4f, total_dur - 0.1f, static_cast<float>(time_sec)));
 
-    // Gentle breath-fade around act cuts (except hard musical burst at 74.0s & 94.5s)
-    const auto& acts = get_acts();
-    const auto& cur = acts[act_id];
-    if (act_id != 0 && act_id != 4 && act_id != 5) {
-        float cut_in = smoothstep(static_cast<float>(cur.start), static_cast<float>(cur.start + 0.45), static_cast<float>(time_sec));
-        fade *= (0.28f + 0.72f * cut_in);
-    }
-
-    // Exposure & flare dynamically shaped by music emotion
     float exposure = 1.12f + 0.14f * af.all + 0.08f * af.onset;
-    if (act_id == 8 && time_sec > 198.5) {
-        // Peak eye catchlight bloom around 03:20 (200.0s)
-        exposure += 0.22f * smoothstep(198.5f, 200.2f, static_cast<float>(time_sec)) *
+    if (sb.cur->kind == SceneKind::MACRO_EYE_REFLECTION && time_sec > 198.5) {
+        exposure += 0.18f * smoothstep(198.5f, 200.2f, static_cast<float>(time_sec)) *
                     (1.0f - smoothstep(200.5f, 202.8f, static_cast<float>(time_sec)));
     }
-    if (act_id == 9 && time_sec > 231.5) {
-        exposure = 1.06f;  // Serene clarity for silent cobalt sea
+    if (sb.cur->kind == SceneKind::SILENT_COBALT_SAIL || sb.cur->kind == SceneKind::EPILOGUE_STARS_SEA) {
+        exposure = 1.06f;
     }
 
     float flare = 0.25f + 0.45f * af.bass + 0.30f * af.onset;
-    if (act_id == 0 || act_id == 5 || act_id == 10) flare *= 0.45f;
+    if (sb.cur->kind == SceneKind::METRO_WINDOW || sb.cur->kind == SceneKind::INTERLUDE_APPROACH ||
+        sb.cur->kind == SceneKind::INTERLUDE_HAND_LIGHT || sb.cur->kind == SceneKind::EPILOGUE_STARS_SEA) {
+        flare *= 0.45f;
+    }
 
-    canvas.compose(frame_idx, exposure, 0.014f, flare, fade);
+    canvas.compose(frame_idx, exposure, 0.012f, flare, fade, sb.blend, sb.cur->trans_type);
 }
 
 int main(int argc, char** argv) {
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(preview_dir);
         std::vector<double> times;
         if (preview_times.empty()) {
-            times = {2.5, 19.6, 39.6, 48.8, 63.0, 84.5, 91.5, 102.0, 135.8, 176.5, 190.5, 200.0, 212.5, 224.0, 235.0, 250.0};
+            times = {3.0, 11.0, 19.6, 25.5, 39.6, 47.5, 55.5, 63.0, 86.0, 91.8, 106.5, 122.0, 136.5, 151.5, 160.0, 167.0, 174.5, 181.5, 190.0, 200.0, 207.5, 222.0, 228.5, 235.5};
         } else {
             std::stringstream ss(preview_times);
             std::string item;
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
             std::snprintf(name, sizeof(name), "frame_%06.2fs.png", ts);
             std::string out_path = preview_dir + "/" + name;
             write_rgb_png(canvas, out_path);
-            std::fprintf(stderr, "Wrote preview %s (act=%d)\n", out_path.c_str(), find_act(ts));
+            std::fprintf(stderr, "Wrote preview %s\n", out_path.c_str());
         }
         return 0;
     }

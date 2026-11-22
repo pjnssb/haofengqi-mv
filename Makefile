@@ -11,7 +11,7 @@ OUT_MP4  := build/haofengqi_mv_1080p.mp4
 
 all: $(TARGET)
 
-$(TARGET): src/main.cpp src/audio_lyrics.hpp src/hdr_canvas.hpp src/sky_and_atmosphere.hpp src/cairo_scenes.hpp src/typography.hpp
+$(TARGET): src/main.cpp src/audio_lyrics.hpp src/storyboard.hpp src/hdr_canvas.hpp src/sky_and_atmosphere.hpp src/cairo_scenes.hpp src/typography.hpp
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) src/main.cpp -o $(TARGET) $(LDFLAGS)
 
